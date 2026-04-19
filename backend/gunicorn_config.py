@@ -2,7 +2,13 @@ import multiprocessing
 import os
 
 # Server socket
-bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
+# bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
+# import os
+
+bind = f"0.0.0.0:{os.environ.get('PORT', '8000')}"
+workers = int(os.environ.get("GUNICORN_WORKERS", "4"))
+timeout = 120
+loglevel = os.environ.get("LOG_LEVEL", "info")
 backlog = 2048
 
 # Worker processes
