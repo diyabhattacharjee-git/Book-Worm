@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
 
   app:
-    build: .
+    build: ./backend
     container_name: bookbot_api
     ports:
       - "8000:8000"
