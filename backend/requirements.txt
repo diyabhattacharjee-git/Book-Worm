@@ -1,0 +1,11 @@
+flask
+flask-cors
+gunicorn
+python-dotenv
+requests
+langchain-groq
+langchain-core
+langgraph
+playwright
+google-search-results
+redis

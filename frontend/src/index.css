@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --ink: #1a1208;
+    --paper: #faf7f2;
+    --amber: #d4790a;
+    --amber-light: #f5a623;
+    --amber-pale: #fef3dc;
+    --forest: #2d5016;
+    --forest-light: #4a7c2f;
+    --rust: #b84a1a;
+    --cream: #f0ebe0;
+    --warm-gray: #8c7b6a;
+    --sidebar-bg: #1c160e;
+    --sidebar-hover: #2a2018;
+    --chat-bg: #f7f3ec;
+    --user-bubble: #2d3748;
+    --bot-bubble: #ffffff;
+  }
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--chat-bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: 'Fraunces', serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c9b99a;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a89070;
+}
+
+/* Typing indicator */
+@keyframes bounce-dot {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-6px); }
+}
+.dot-1 { animation: bounce-dot 1.2s infinite 0s; }
+.dot-2 { animation: bounce-dot 1.2s infinite 0.2s; }
+.dot-3 { animation: bounce-dot 1.2s infinite 0.4s; }
+
+/* Fade-in for messages */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.msg-anim {
+  animation: msg-in 0.25s ease-out forwards;
+}
+
+/* Store badge pulse */
+@keyframes badge-pop {
+  0%   { transform: scale(0.92); opacity: 0; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+.badge-anim {
+  animation: badge-pop 0.2s ease-out forwards;
+}
