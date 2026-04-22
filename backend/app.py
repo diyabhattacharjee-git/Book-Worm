@@ -31,7 +31,7 @@ from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
-# ─── LOGGING SETUP (Production-ready) ────────────────────────────────────────
+# ─── LOGGING SETUP 
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,7 +56,7 @@ llm = ChatGroq(
     api_key=GROQ_KEY
 )
 
-# ─── REDIS CACHE (Production) ─────────────────────────────────────────────────
+# ─── REDIS CACHE 
 
 try:
     import redis
