@@ -31,7 +31,7 @@ from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
-# ─── LOGGING SETUP 
+#LOGGING SETUP 
 
 logging.basicConfig(
     level=logging.INFO,
