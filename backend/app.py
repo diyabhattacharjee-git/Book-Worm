@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── CONFIG ───────────────────────────────────────────────────────────────────
+# CONFIG 
 
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 SERP_API_KEY = os.getenv("SERP_API_KEY")
@@ -48,7 +48,7 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 app = Flask(__name__)
 CORS(app)
 
-# ─── LLM ──────────────────────────────────────────────────────────────────────
+# LLM
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
@@ -56,7 +56,7 @@ llm = ChatGroq(
     api_key=GROQ_KEY
 )
 
-# ─── REDIS CACHE 
+# REDIS CACHE 
 
 try:
     import redis
