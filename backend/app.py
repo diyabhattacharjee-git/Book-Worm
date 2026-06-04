@@ -56,7 +56,6 @@ llm = ChatGroq(
     api_key=GROQ_KEY
 )
 
-# REDIS CACHE 
 
 try:
     import redis
