@@ -3,7 +3,6 @@
 An AI-powered book recommendation app that suggests books and compares their prices across Indian e-commerce sites like Amazon and Flipkart.
 
  **Live App**: [book-worm-pink.vercel.app](https://book-worm-pink.vercel.app/)
- **Repo**: [github.com/diyabhattacharjee-git/Book-Worm](https://github.com/diyabhattacharjee-git/Book-Worm)
 
 ## What it does
 
