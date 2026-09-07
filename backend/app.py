@@ -46,6 +46,10 @@ app = Flask(__name__)
 CORS(app)
 
 # LLM
+# NOTE: llama-3.3-70b-versatile was deprecated/decommissioned by Groq.
+# Using openai/gpt-oss-120b, Groq's recommended open-source replacement
+# (free tier available, strong reasoning, tool-calling support).
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 llm = ChatGroq(
@@ -178,7 +182,7 @@ def google_books_search(query: str, use_cache=True, timeout=5) -> dict:
         return result
 
     except requests.Timeout:
-        logger.warning(f"Timeout for Google Books: {query}")
+        logger.warning(f"⏳ Timeout for Google Books: {query}")
         return open_library_search(query)
     except Exception as e:
         logger.error(f"Google Books error: {e}")
@@ -222,7 +226,7 @@ def open_library_search(query: str, timeout=5) -> dict:
         return result
 
     except requests.Timeout:
-        logger.warning(f"Timeout for Open Library: {query}")
+        logger.warning(f"⏳ Timeout for Open Library: {query}")
         return {"error": "Request timeout"}
     except Exception as e:
         return {"error": str(e)}
@@ -264,7 +268,7 @@ def fetch_books_by_keywords(keywords: list, original_title: str, max_per_keyword
                 results = data.get("items", [])
                 book_cache.set(cache_key, results)
             except requests.Timeout:
-                logger.warning(f"Timeout for keyword: {keyword}")
+                logger.warning(f"⏳ Timeout for keyword: {keyword}")
                 continue
             except Exception as e:
                 logger.error(f"Keyword search error for '{keyword}': {e}")
@@ -317,7 +321,7 @@ def fetch_books_by_keywords_open_library(keywords: list, original_title: str, ma
                 book_cache.set(cache_key, results)
                 time.sleep(0.3)
             except requests.Timeout:
-                logger.warning(f"Timeout for Open Library keyword: {keyword}")
+                logger.warning(f"⏳ Timeout for Open Library keyword: {keyword}")
                 continue
             except Exception as e:
                 logger.error(f"Keyword search error for '{keyword}': {e}")
@@ -422,15 +426,30 @@ def fetch_amazon_price_serpapi(query, timeout=10):
 
 def fetch_flipkart_price_serpapi(query, timeout=10):
     """
-    Flipkart prices via SerpApi's Google Shopping engine, restricted to
-    flipkart.com results. SerpApi has no dedicated Flipkart engine, so
-    Google Shopping + site filter is the standard SerpApi-only approach
-    (this fully replaces the old Playwright-based scraper).
+    Flipkart prices via SerpApi.
+
+    IMPORTANT: SerpApi has no dedicated Flipkart engine, and the `site:`
+    operator does NOT work on the `google_shopping` engine — Shopping
+    results come from Google's product/Merchant feed, not the web index,
+    so a site: filter there is silently ignored. On top of that, Flipkart
+    frequently does not submit a Google Merchant feed for its book catalog
+    in India, so google_shopping often returns zero real Flipkart listings
+    no matter what you search.
+
+    Strategy:
+      1. Try google_shopping first (works fine for categories where
+         Flipkart *does* feed Google Shopping — electronics, etc.).
+      2. If that yields nothing, fall back to a plain Google organic
+         search with `site:flipkart.com`, and pull price out of the
+         organic snippet/rich snippet with a regex. This is less clean
+         but is the only way to get Flipkart-specific hits through SerpApi.
     """
-    logger.info(f"Flipkart Search (SerpApi Google Shopping): {query}")
-    params = {
+    logger.info(f"Flipkart Search (SerpApi google_shopping): {query}")
+    books = []
+
+    shopping_params = {
         "engine": "google_shopping",
-        "q": f"{query} site:flipkart.com",
+        "q": query,
         "google_domain": "google.co.in",
         "gl": "in",
         "hl": "en",
@@ -438,12 +457,13 @@ def fetch_flipkart_price_serpapi(query, timeout=10):
         "timeout": timeout
     }
     try:
-        search = GoogleSearch(params)
+        search = GoogleSearch(shopping_params)
         results = search.get_dict()
-        books = []
-        shopping_results = results.get("shopping_results", [])
 
-        for item in shopping_results:
+        if "error" in results:
+            logger.warning(f"Flipkart google_shopping error: {results['error']}")
+
+        for item in results.get("shopping_results", []):
             source = (item.get("source") or "").lower()
             link = item.get("product_link") or item.get("link") or ""
             if "flipkart" not in source and "flipkart.com" not in link:
@@ -456,12 +476,63 @@ def fetch_flipkart_price_serpapi(query, timeout=10):
             })
             if len(books) >= 6:
                 break
-
-        logger.info(f"Flipkart found {len(books)} results")
-        return books
     except Exception as e:
-        logger.error(f"Flipkart SerpApi error: {e}")
-        return []
+        logger.error(f"Flipkart google_shopping error: {e}")
+
+    if books:
+        logger.info(f"Flipkart (google_shopping) found {len(books)} results")
+        return books
+
+    # Fallback: organic Google search restricted to flipkart.com
+    logger.info(f"Flipkart Search fallback (SerpApi google organic): {query}")
+    organic_params = {
+        "engine": "google",
+        "q": f"{query} site:flipkart.com",
+        "google_domain": "google.co.in",
+        "gl": "in",
+        "hl": "en",
+        "api_key": SERP_API_KEY,
+        "timeout": timeout
+    }
+    try:
+        search = GoogleSearch(organic_params)
+        results = search.get_dict()
+
+        if "error" in results:
+            logger.warning(f"Flipkart organic fallback error: {results['error']}")
+
+        for item in results.get("organic_results", []):
+            link = item.get("link", "")
+            if "flipkart.com" not in link:
+                continue
+
+            price = None
+            # Prices sometimes surface in rich_snippet, sometimes only in the snippet text
+            rich = item.get("rich_snippet", {}) or {}
+            price = (
+                rich.get("top", {}).get("extensions", [None])[0]
+                if rich.get("top", {}).get("extensions")
+                else None
+            )
+            if not price:
+                snippet = item.get("snippet", "") or ""
+                match = re.search(r"₹\s?[\d,]+", snippet)
+                price = match.group() if match else "Not available"
+
+            books.append({
+                "store": "Flipkart",
+                "title": item.get("title"),
+                "price": price,
+                "link": link
+            })
+            if len(books) >= 6:
+                break
+
+        logger.info(f"Flipkart (organic fallback) found {len(books)} results")
+    except Exception as e:
+        logger.error(f"Flipkart organic fallback error: {e}")
+
+    return books
 
 
 def multi_store_price_search(query):
@@ -699,7 +770,7 @@ No markdown. Only valid JSON array.
 
 def execution_agent(recommendations: list, context: dict) -> list:
     """Fetches prices for TOP 3 books only, using SerpApi for both stores"""
-    logger.info("[ExecutionAgent] Planning purchase strategy...")
+    logger.info("🛒 [ExecutionAgent] Planning purchase strategy...")
 
     enriched = []
 
