@@ -9,10 +9,9 @@ import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import time
-from functools import wraps
 from collections import OrderedDict
 from serpapi import GoogleSearch
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from langchain_groq import ChatGroq
 from langchain_core.tools import tool
@@ -24,14 +23,12 @@ from langchain_core.messages import (
 )
 
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Optional, Any
+from typing import TypedDict, List
 from langchain_core.messages import BaseMessage
-
-from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
-#LOGGING SETUP 
+# LOGGING SETUP
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# CONFIG 
+# CONFIG
 
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 SERP_API_KEY = os.getenv("SERP_API_KEY")
@@ -49,9 +46,10 @@ app = Flask(__name__)
 CORS(app)
 
 # LLM
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model=GROQ_MODEL,
     temperature=0,
     api_key=GROQ_KEY
 )
@@ -62,10 +60,10 @@ try:
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     USE_REDIS = True
-    logger.info("✅ Redis connected for distributed caching")
+    logger.info("Redis connected for distributed caching")
 except Exception as e:
     USE_REDIS = False
-    logger.warning(f"⚠️ Redis not available, using in-memory cache: {e}")
+    logger.warning(f"Redis not available, using in-memory cache: {e}")
 
 
 class SimpleCache:
@@ -141,64 +139,6 @@ class RateLimiter:
 
 google_books_limiter = RateLimiter(max_calls=50, time_window=60)
 
-# ─── PLAYWRIGHT BROWSER POOL (Production Fix) ─────────────────────────────────
-
-class BrowserPool:
-    """Reusable browser instance to avoid expensive launches"""
-    def __init__(self):
-        self.playwright = None
-        self.browser = None
-        self.initialized = False
-        
-    def initialize(self):
-        if not self.initialized:
-            try:
-                self.playwright = sync_playwright().start()
-                self.browser = self.playwright.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu"
-                    ]
-                )
-                self.initialized = True
-                logger.info("✅ Browser pool initialized")
-            except Exception as e:
-                logger.error(f"Browser initialization failed: {e}")
-                self.initialized = False
-    
-    def get_context(self):
-        if not self.initialized:
-            self.initialize()
-        if self.browser:
-            return self.browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36"
-                )
-            )
-        return None
-    
-    def close(self):
-        if self.browser:
-            self.browser.close()
-        if self.playwright:
-            self.playwright.stop()
-        self.initialized = False
-
-
-browser_pool = BrowserPool()
-
-# Initialize browser pool on startup (production optimization)
-try:
-    browser_pool.initialize()
-except Exception as e:
-    logger.warning(f"Browser pool initialization failed on startup: {e}")
-
 # ─── BOOK DATA APIs WITH TIMEOUT ──────────────────────────────────────────────
 
 def google_books_search(query: str, use_cache=True, timeout=5) -> dict:
@@ -206,11 +146,11 @@ def google_books_search(query: str, use_cache=True, timeout=5) -> dict:
     if use_cache:
         cached = book_cache.get(cache_key)
         if cached:
-            logger.info(f"✅ Cache hit for: {query}")
+            logger.info(f"Cache hit for: {query}")
             return cached
 
     if not google_books_limiter.can_call():
-        logger.info("⏳ Rate limit reached. Trying Open Library fallback...")
+        logger.info("Rate limit reached. Trying Open Library fallback...")
         return open_library_search(query)
 
     url = "https://www.googleapis.com/books/v1/volumes"
@@ -238,7 +178,7 @@ def google_books_search(query: str, use_cache=True, timeout=5) -> dict:
         return result
 
     except requests.Timeout:
-        logger.warning(f"⏳ Timeout for Google Books: {query}")
+        logger.warning(f"Timeout for Google Books: {query}")
         return open_library_search(query)
     except Exception as e:
         logger.error(f"Google Books error: {e}")
@@ -282,7 +222,7 @@ def open_library_search(query: str, timeout=5) -> dict:
         return result
 
     except requests.Timeout:
-        logger.warning(f"⏳ Timeout for Open Library: {query}")
+        logger.warning(f"Timeout for Open Library: {query}")
         return {"error": "Request timeout"}
     except Exception as e:
         return {"error": str(e)}
@@ -324,7 +264,7 @@ def fetch_books_by_keywords(keywords: list, original_title: str, max_per_keyword
                 results = data.get("items", [])
                 book_cache.set(cache_key, results)
             except requests.Timeout:
-                logger.warning(f"⏳ Timeout for keyword: {keyword}")
+                logger.warning(f"Timeout for keyword: {keyword}")
                 continue
             except Exception as e:
                 logger.error(f"Keyword search error for '{keyword}': {e}")
@@ -343,13 +283,13 @@ def fetch_books_by_keywords(keywords: list, original_title: str, max_per_keyword
                 "categories": info.get("categories", []),
                 "matched_keyword": keyword
             })
-            
+
             if len(recommended) >= 10:
                 break
-                
+
         if len(recommended) >= 10:
             break
-            
+
         time.sleep(0.2)
 
     return recommended
@@ -377,7 +317,7 @@ def fetch_books_by_keywords_open_library(keywords: list, original_title: str, ma
                 book_cache.set(cache_key, results)
                 time.sleep(0.3)
             except requests.Timeout:
-                logger.warning(f"⏳ Timeout for Open Library keyword: {keyword}")
+                logger.warning(f"Timeout for Open Library keyword: {keyword}")
                 continue
             except Exception as e:
                 logger.error(f"Keyword search error for '{keyword}': {e}")
@@ -403,13 +343,13 @@ def fetch_books_by_keywords_open_library(keywords: list, original_title: str, ma
                 "categories": book.get("subject", [])[:3] if "subject" in book else [keyword],
                 "matched_keyword": keyword
             })
-            
+
             if len(recommended) >= 10:
                 break
-                
+
         if len(recommended) >= 10:
             break
-            
+
     return recommended
 
 
@@ -449,10 +389,11 @@ def filter_high_quality_books(candidates):
         filtered.append(book)
     return filtered[:10]
 
-# ─── SCRAPING WITH BROWSER POOL ───────────────────────────────────────────────
+# ─── PRICE FETCHING — SERPAPI ONLY (Amazon + Flipkart) ────────────────────────
 
 def fetch_amazon_price_serpapi(query, timeout=10):
-    logger.info(f"🔍 Amazon Search: {query}")
+    """Amazon.in prices via SerpApi's dedicated Amazon engine."""
+    logger.info(f"Amazon Search (SerpApi): {query}")
     params = {
         "engine": "amazon",
         "amazon_domain": "amazon.in",
@@ -465,105 +406,83 @@ def fetch_amazon_price_serpapi(query, timeout=10):
         results = search.get_dict()
         books = []
         if "organic_results" in results:
-            for item in results["organic_results"][:5]:
+            for item in results["organic_results"][:6]:
                 books.append({
+                    "store": "Amazon",
                     "title": item.get("title"),
                     "price": item.get("price"),
                     "link": item.get("link")
                 })
-        logger.info(f"✅ Amazon found {len(books)} books")
+        logger.info(f"Amazon found {len(books)} results")
         return books
     except Exception as e:
-        logger.error(f"Amazon search error: {e}")
+        logger.error(f"Amazon SerpApi error: {e}")
         return []
 
 
-def flipkart_browser_scraper(query, timeout=15):
-    """Uses browser pool for better performance"""
-    books = []
-    context = None
+def fetch_flipkart_price_serpapi(query, timeout=10):
+    """
+    Flipkart prices via SerpApi's Google Shopping engine, restricted to
+    flipkart.com results. SerpApi has no dedicated Flipkart engine, so
+    Google Shopping + site filter is the standard SerpApi-only approach
+    (this fully replaces the old Playwright-based scraper).
+    """
+    logger.info(f"Flipkart Search (SerpApi Google Shopping): {query}")
+    params = {
+        "engine": "google_shopping",
+        "q": f"{query} site:flipkart.com",
+        "google_domain": "google.co.in",
+        "gl": "in",
+        "hl": "en",
+        "api_key": SERP_API_KEY,
+        "timeout": timeout
+    }
     try:
-        context = browser_pool.get_context()
-        if not context:
-            logger.error("Failed to get browser context")
-            return []
-            
-        page = context.new_page()
-        page.set_default_timeout(timeout * 1000)
-        
-        url = f"https://www.flipkart.com/search?q={query.replace(' ', '%20')}"
-        page.goto(url, timeout=timeout * 1000)
-        
-        try:
-            page.wait_for_selector("button._2KpZ6l._2doB4z", timeout=3000)
-            page.click("button._2KpZ6l._2doB4z")
-        except:
-            pass
-        page.mouse.wheel(0, 3000)
-        page.wait_for_timeout(2000)
-        page.wait_for_selector("div[data-id]", timeout=timeout * 1000)
-        
-        cards = page.query_selector_all("div[data-id]")
-        seen = set()
-        for card in cards[:6]:
-            try:
-                title_tag = card.query_selector("a[title]")
-                if not title_tag:
-                    continue
-                title = title_tag.get_attribute("title")
-                if not title or title in seen:
-                    continue
-                seen.add(title)
-                card_text = card.inner_text()
-                price_match = re.search(r"₹\s?[\d,]+", card_text)
-                price = price_match.group() if price_match else "Not available"
-                href = title_tag.get_attribute("href")
-                link = ""
-                if href:
-                    clean_href = href.split('?')[0]
-                    link = clean_href if clean_href.startswith('http') else f"https://www.flipkart.com{clean_href}"
-                if link:
-                    books.append({"store": "Flipkart", "title": title, "price": price, "link": link})
-                if len(books) >= 6:
-                    break
-            except Exception as e:
-                logger.error(f"Card parse error: {e}")
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        books = []
+        shopping_results = results.get("shopping_results", [])
+
+        for item in shopping_results:
+            source = (item.get("source") or "").lower()
+            link = item.get("product_link") or item.get("link") or ""
+            if "flipkart" not in source and "flipkart.com" not in link:
                 continue
-        
-        logger.info(f"✅ Flipkart: {len(books)} books found")
+            books.append({
+                "store": "Flipkart",
+                "title": item.get("title"),
+                "price": item.get("price"),
+                "link": link
+            })
+            if len(books) >= 6:
+                break
+
+        logger.info(f"Flipkart found {len(books)} results")
         return books
     except Exception as e:
-        logger.error(f"Flipkart error: {e}")
+        logger.error(f"Flipkart SerpApi error: {e}")
         return []
-    finally:
-        if context:
-            try:
-                context.close()
-            except:
-                pass
 
 
 def multi_store_price_search(query):
-    """Parallel price search with timeout handling"""
+    """Parallel price search across Amazon and Flipkart, both via SerpApi."""
     results = {"Amazon": [], "Flipkart": []}
-    
+
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_flipkart = executor.submit(flipkart_browser_scraper, query, 15)
         future_amazon = executor.submit(fetch_amazon_price_serpapi, query, 10)
-        
+        future_flipkart = executor.submit(fetch_flipkart_price_serpapi, query, 10)
+
         try:
-            fk = future_flipkart.result(timeout=20)
-            results["Flipkart"] = fk
-        except Exception as e:
-            logger.warning(f"Flipkart timeout: {e}")
-            
-        try:
-            amz = future_amazon.result(timeout=15)
-            results["Amazon"] = amz
+            results["Amazon"] = future_amazon.result(timeout=15)
         except Exception as e:
             logger.warning(f"Amazon timeout: {e}")
-    
-    logger.info(f"📊 Total results: {len(results['Amazon']) + len(results['Flipkart'])}")
+
+        try:
+            results["Flipkart"] = future_flipkart.result(timeout=15)
+        except Exception as e:
+            logger.warning(f"Flipkart timeout: {e}")
+
+    logger.info(f"Total results: {len(results['Amazon']) + len(results['Flipkart'])}")
     return results
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -572,7 +491,7 @@ def multi_store_price_search(query):
 
 def user_intent_and_context_agent(query: str, book_info: dict) -> dict:
     """Merged UserIntentAgent + ContextAgent into single LLM call"""
-    logger.info("🧠 [MergedAgent] Analyzing user intent + building reader profile...")
+    logger.info("[MergedAgent] Analyzing user intent + building reader profile...")
 
     prompt = f"""
 You are a combined User Intent & Reader Profile Analysis Agent.
@@ -612,7 +531,7 @@ No markdown, no explanation. Only valid JSON.
         raw = response.content.strip()
         raw = re.sub(r"^```json|^```|```$", "", raw, flags=re.MULTILINE).strip()
         result = json.loads(raw)
-        logger.info(f"✅ [MergedAgent] Goal={result['intent'].get('goal')}, Level={result['reader_profile'].get('reading_level')}")
+        logger.info(f"[MergedAgent] Goal={result['intent'].get('goal')}, Level={result['reader_profile'].get('reading_level')}")
         return result
     except Exception as e:
         logger.error(f"[MergedAgent] Error: {e}")
@@ -641,7 +560,7 @@ No markdown, no explanation. Only valid JSON.
 
 def content_similarity_agent(book_info: dict, intent: dict) -> dict:
     """Extracts deep semantic features for finding similar books"""
-    logger.info("📚 [ContentSimilarityAgent] Extracting semantic features...")
+    logger.info("[ContentSimilarityAgent] Extracting semantic features...")
 
     prompt = f"""
 You are a Content Similarity Agent that creates a precise semantic fingerprint of a book.
@@ -675,7 +594,7 @@ No markdown. Only valid JSON.
         raw = response.content.strip()
         raw = re.sub(r"^```json|^```|```$", "", raw, flags=re.MULTILINE).strip()
         result = json.loads(raw)
-        logger.info(f"✅ [ContentSimilarityAgent] Genre={result.get('primary_genre')}, Style={result.get('writing_style')}")
+        logger.info(f"[ContentSimilarityAgent] Genre={result.get('primary_genre')}, Style={result.get('writing_style')}")
         return result
     except Exception as e:
         logger.error(f"[ContentSimilarityAgent] Error: {e}")
@@ -698,7 +617,7 @@ def merged_diversity_and_ranking_agent(candidates: list, original_title: str, in
     MERGED: Diversity + Critic into single LLM call
     Reduces from 5 to 4 LLM calls per recommendation request
     """
-    logger.info("🌈⚖️ [MergedDiversityRankingAgent] Ensuring diversity + ranking quality...")
+    logger.info("[MergedDiversityRankingAgent] Ensuring diversity + ranking quality...")
 
     if not candidates:
         return []
@@ -757,7 +676,7 @@ No markdown. Only valid JSON array.
 
         if isinstance(ranked, list):
             ranked = sorted(ranked, key=lambda x: x.get("score", 0), reverse=True)
-            logger.info(f"✅ [MergedDiversityRankingAgent] Final {len(ranked)} diverse & ranked books")
+            logger.info(f"[MergedDiversityRankingAgent] Final {len(ranked)} diverse & ranked books")
             return ranked[:5]
         return []
 
@@ -779,14 +698,14 @@ No markdown. Only valid JSON array.
 
 
 def execution_agent(recommendations: list, context: dict) -> list:
-    """Fetches prices for TOP 3 books only"""
-    logger.info("🛒 [ExecutionAgent] Planning purchase strategy...")
+    """Fetches prices for TOP 3 books only, using SerpApi for both stores"""
+    logger.info("[ExecutionAgent] Planning purchase strategy...")
 
     enriched = []
 
     for book in recommendations[:3]:
         title = book["title"]
-        logger.info(f"  💳 [ExecutionAgent] Getting prices for: {title}")
+        logger.info(f"[ExecutionAgent] Getting prices for: {title}")
 
         try:
             store_results = multi_store_price_search(title)
@@ -868,37 +787,37 @@ def execution_agent(recommendations: list, context: dict) -> list:
         book_enriched["format_advice"] = "Check Amazon/Flipkart for pricing"
         enriched.append(book_enriched)
 
-    logger.info(f"✅ [ExecutionAgent] Enriched {len(enriched)} books (prices for top 3)")
+    logger.info(f"[ExecutionAgent] Enriched {len(enriched)} books (prices for top 3)")
     return enriched
 
 
 def run_multi_agent_recommendation(query: str, fetch_prices: bool = False) -> dict:
     """
     OPTIMIZED Orchestrator:
-    - Now uses only 4 LLM calls (was 5-6)
+    - Uses only 4 LLM calls (was 5-6)
     - Merged Intent+Context (saved 1 call)
     - Merged Diversity+Ranking (saved 1 call)
     """
-    logger.info(f"\n🚀 OPTIMIZED Multi-Agent Pipeline starting for: '{query}'")
+    logger.info(f"\nOPTIMIZED Multi-Agent Pipeline starting for: '{query}'")
 
     book_info = google_books_search(query, use_cache=True)
     if "error" in book_info:
         return {"error": f"Could not find book: {query}"}
 
-    logger.info(f"📖 Original book: {book_info['title']}")
+    logger.info(f"Original book: {book_info['title']}")
 
     # LLM Call 1: MERGED User Intent + Context Agent
     merged_analysis = user_intent_and_context_agent(query, book_info)
     intent = merged_analysis["intent"]
     context = merged_analysis["reader_profile"]
 
-    # LLM Call 2: Content Similarity Agent (runs in parallel with candidate fetch)
+    # LLM Call 2: Content Similarity Agent
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_similarity = executor.submit(content_similarity_agent, book_info, intent)
         similarity = future_similarity.result()
 
     # Fetch candidate books
-    logger.info("📚 Fetching candidate books...")
+    logger.info("Fetching candidate books...")
 
     # LLM Call 3: Known recommendations
     known_recs_prompt = f"""
@@ -931,7 +850,7 @@ Return ONLY a JSON array (no markdown):
         llm_candidates = json.loads(raw)
         if not isinstance(llm_candidates, list):
             llm_candidates = []
-        logger.info(f"🧠 LLM suggested {len(llm_candidates)} candidates")
+        logger.info(f"LLM suggested {len(llm_candidates)} candidates")
     except Exception as e:
         logger.error(f"LLM candidate generation error: {e}")
         llm_candidates = []
@@ -959,7 +878,7 @@ Return ONLY a JSON array (no markdown):
             verified_candidates.append(llm_book)
             verified_titles.add(llm_book["title"].lower())
 
-    logger.info(f"📚 Total candidates pool: {len(verified_candidates)} (capped at 10)")
+    logger.info(f"Total candidates pool: {len(verified_candidates)} (capped at 10)")
 
     # LLM Call 4: MERGED Diversity + Ranking Agent
     final_recommendations = merged_diversity_and_ranking_agent(
@@ -1027,7 +946,7 @@ def compare_price(query: str) -> str:
 
         if not amazon_books and not flipkart_books:
             return format_response(
-                text="❌ No results found on either store. Try a different search term.",
+                text="No results found on either store. Try a different search term.",
                 comparison=None
             )
 
@@ -1081,14 +1000,14 @@ def compare_price(query: str) -> str:
                         })
 
         return format_response(
-            text=f"📊 Price comparison for '{query}' (showing top 2 from each store):",
+            text=f"Price comparison for '{query}' (showing top 2 from each store):",
             comparison=comparison_data
         )
 
     except Exception as e:
         logger.error(f"compare_price ERROR: {e}")
         return format_response(
-            text="⚠️ Something went wrong while comparing prices.",
+            text="Something went wrong while comparing prices.",
             comparison=None
         )
 
@@ -1100,22 +1019,22 @@ def product_search(query: str) -> str:
     Use this for simple price searches when user mentions a book title.
     """
     try:
-        logger.info(f"🔍 PRODUCT_SEARCH: {query}")
+        logger.info(f"PRODUCT_SEARCH: {query}")
         store_results = multi_store_price_search(query)
 
         if not store_results["Amazon"] and not store_results["Flipkart"]:
             return format_response(
-                text="❌ No results found. Try rephrasing your search.",
+                text="No results found. Try rephrasing your search.",
                 stores={}
             )
 
         return format_response(
-            text=f"Here are prices for '{query}' 📚",
+            text=f"Here are prices for '{query}' ",
             stores=store_results
         )
     except Exception as e:
         logger.error(f"product_search ERROR: {e}")
-        return format_response(text="⚠️ Something went wrong while searching.", stores={})
+        return format_response(text="Something went wrong while searching.", stores={})
 
 
 @tool
@@ -1125,18 +1044,18 @@ def recommend_similar_books(query: str) -> str:
     Use when user wants book recommendations WITHOUT purchase links.
     """
     try:
-        logger.info(f"📖 RECOMMEND_SIMILAR_BOOKS: {query}")
+        logger.info(f"RECOMMEND_SIMILAR_BOOKS: {query}")
 
         result = run_multi_agent_recommendation(query, fetch_prices=False)
 
         if "error" in result:
             return format_response(
-                text=f"❌ {result['error']}",
+                text=f"{result['error']}",
                 recommendations=[]
             )
 
         return format_response(
-            text=f"📚 Books similar to '{result['original_book']}':",
+            text=f"Books similar to '{result['original_book']}':",
             recommendations=result["recommendations"],
             agent_insights=result.get("agent_insights")
         )
@@ -1144,7 +1063,7 @@ def recommend_similar_books(query: str) -> str:
     except Exception as e:
         logger.error(f"recommend_similar_books ERROR: {e}")
         return format_response(
-            text="⚠️ Something went wrong while finding recommendations.",
+            text="Something went wrong while finding recommendations.",
             recommendations=[]
         )
 
@@ -1157,13 +1076,13 @@ def recommend_books_with_prices(query: str) -> str:
     Use when user wants book recommendations with prices/links.
     """
     try:
-        logger.info(f"🎯 RECOMMEND_BOOKS_WITH_PRICES: {query}")
+        logger.info(f"RECOMMEND_BOOKS_WITH_PRICES: {query}")
 
         result = run_multi_agent_recommendation(query, fetch_prices=True)
 
         if "error" in result:
             return format_response(
-                text=f"❌ {result['error']}",
+                text=f"{result['error']}",
                 recommendations_with_links=[]
             )
 
@@ -1184,7 +1103,7 @@ def recommend_books_with_prices(query: str) -> str:
             })
 
         return format_response(
-            text=f"📚 Books similar to '{result['original_book']}' (prices for top 3):",
+            text=f"Books similar to '{result['original_book']}' (prices for top 3):",
             recommendations_with_links=recs_with_links,
             agent_insights=result.get("agent_insights")
         )
@@ -1192,14 +1111,14 @@ def recommend_books_with_prices(query: str) -> str:
     except Exception as e:
         logger.error(f"recommend_books_with_prices ERROR: {e}")
         return format_response(
-            text="⚠️ Something went wrong while finding recommendations with prices.",
+            text="Something went wrong while finding recommendations with prices.",
             recommendations_with_links=[]
         )
 
 # ─── LANGGRAPH SETUP ──────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """
-You are BookBot — an intelligent book shopping assistant 📚 powered by an OPTIMIZED multi-agent AI system.
+You are BookBot — an intelligent book shopping assistant powered by an OPTIMIZED multi-agent AI system.
 
 **YOUR CORE IDENTITY**
 - You ONLY help with book-related queries
@@ -1284,7 +1203,7 @@ def tool_node(state):
             elif tool_name in TOOL_MAP:
                 tool_result = TOOL_MAP[tool_name].invoke(args)
                 result = json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result)
-                logger.info(f"✅ TOOL RESULT ({tool_name}): {str(result)[:200]}")
+                logger.info(f"TOOL RESULT ({tool_name}): {str(result)[:200]}")
             else:
                 result = json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -1319,7 +1238,7 @@ def chat():
     try:
         data = request.get_json()
         user_msg = data.get("message", "")
-        logger.info(f"\n💬 USER: {user_msg}")
+        logger.info(f"\nUSER: {user_msg}")
 
         result = shopbot.invoke({"messages": [HumanMessage(content=user_msg)]})
 
@@ -1334,7 +1253,7 @@ def chat():
             if isinstance(m, ToolMessage):
                 try:
                     parsed = json.loads(m.content)
-                    response_text = parsed.get("response", "Here are your results 📚")
+                    response_text = parsed.get("response", "Here are your results ")
                     stores_data = parsed.get("stores", None)
                     recommendations_data = parsed.get("recommendations", None)
                     recommendations_with_links_data = parsed.get("recommendations_with_links", None)
@@ -1362,7 +1281,7 @@ def chat():
     except Exception as e:
         logger.error(f"CHAT ERROR: {e}")
         return jsonify({
-            "response": "⚠️ Backend error occurred",
+            "response": " Backend error occurred",
             "stores": None,
             "recommendations": None,
             "recommendations_with_links": None,
@@ -1378,7 +1297,7 @@ def health():
         "service": "BookBot Multi-Agent PRODUCTION",
         "environment": ENVIRONMENT,
         "cache": "Redis" if USE_REDIS else "In-Memory",
-        "browser_pool": browser_pool.initialized,
+        "llm_model": GROQ_MODEL,
         "agents": [
             "MergedIntentContextAgent",
             "ContentSimilarityAgent",
@@ -1386,7 +1305,7 @@ def health():
             "ExecutionAgent"
         ],
         "tools": [
-            "compare_price (NEW)",
+            "compare_price",
             "product_search",
             "recommend_similar_books",
             "recommend_books_with_prices"
@@ -1394,13 +1313,13 @@ def health():
         "optimizations": [
             "4 LLM calls (was 5-6)",
             "Redis distributed cache",
-            "Browser pool (reusable)",
+            "SerpApi for Amazon + Flipkart (no browser automation)",
             "Parallel execution",
             "Gunicorn ready",
             "Production logging"
         ],
         "time": datetime.now().isoformat(),
-        "version": "4.0-PRODUCTION"
+        "version": "5.0-PRODUCTION"
     })
 
 
