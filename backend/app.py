@@ -46,9 +46,6 @@ app = Flask(__name__)
 CORS(app)
 
 # LLM
-# NOTE: llama-3.3-70b-versatile was deprecated/decommissioned by Groq.
-# Using openai/gpt-oss-120b, Groq's recommended open-source replacement
-# (free tier available, strong reasoning, tool-calling support).
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
